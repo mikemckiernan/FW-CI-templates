@@ -72,6 +72,10 @@ inputs:
       By default, only run tags that match the pattern /.+-v[0-9]+.[0-9]+.[0-9]+/.
       Set to false to also run on merges to the default branch and also specify the rules for when to run.
     default: "true"
+  docs-version-override:
+    description: Override the version of the docs to publish. If not specified, the version will be extracted from the tag.
+    required: false
+    default: ""
   s3-target-root:
     description: Root URL/path for S3 bucket
     required: true
@@ -118,7 +122,15 @@ runs:
         echo "::notice:: GitHub ref: ${GITHUB_REF}"
         echo "::notice:: Commit message: ${COMMIT_MSG}"
 
-        if [[ "$GITHUB_REF" =~ /(.+)-v([0-9]+\.[0-9]+(\.[0-9]+)?) ]]; then
+        VERSION=""
+        DOCSET=""
+
+        # Use docs-version-override if provided, otherwise extract from tag
+        if [[ -n "${{ inputs.docs-version-override }}" ]]; then
+          VERSION="${{ inputs.docs-version-override }}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "::notice:: Publishing docs for version ${VERSION} (from override)" >> $GITHUB_STEP_SUMMARY
+        elif [[ "$GITHUB_REF" =~ /(.+)-v([0-9]+\.[0-9]+(\.[0-9]+)?) ]]; then
           case ${{ inputs.project-type }} in
             single-docset)
               VERSION="${BASH_REMATCH[2]}"
@@ -151,7 +163,9 @@ runs:
         # If the overwrite-latest-on-tag input is true and the ref is a tag, publish latest.
         # If the overwrite-latest-on-tag input is false and the ref is a tag, do not publish latest.
         # Otherwise, publish latest for merges to the default branch. Projects that run on version tags only do not reach this code path.
-        if [[ "${COMMIT_MSG}" =~ /not-latest ]] || [[ "$GITHUB_REF" =~ "not-latest" ]]; then
+        if [[ -n "${{ inputs.docs-version-override }}" ]]; then
+          PUBLISH_LATEST=false
+        elif [[ "${COMMIT_MSG}" =~ /not-latest ]] || [[ "$GITHUB_REF" =~ "not-latest" ]]; then
           PUBLISH_LATEST=false
         elif [[ ${{ inputs.overwrite-latest-on-tag }} == 'true' && "$GITHUB_REF" == refs/tags/* ]]; then
           PUBLISH_LATEST=true
@@ -247,6 +261,7 @@ runs:
       run: |
         echo "Syncing artifacts to latest directory"
         aws s3 sync . "${S3_ROOT}/${S3_PATH}/latest" --exclude .buildinfo --exclude .doctrees --delete
+        aws s3 cp "versions1.json" "${S3_ROOT}/${S3_PATH}/"
 
         echo "published=true" >> $GITHUB_OUTPUT
 
