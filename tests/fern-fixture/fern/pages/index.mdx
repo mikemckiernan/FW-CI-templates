@@ -1,0 +1,214 @@
+---
+title: Fern Docs Actions
+---
+
+# Fern Docs Actions
+
+Composite GitHub Actions for preview and publishing NVIDIA docs that use Fern.
+
+## Prerequisites
+
+- A `fern/` directory in the repository containing a `fern.config.json` and `docs.yml`.
+- A `DOCS_FERN_TOKEN` secret for your project.
+
+## Actions
+
+| Action | Description |
+| --- | --- |
+| `fern-setup` | Installs Node.js and the Fern CLI. Call this before any other Fern action. |
+| `fern-generate` | Runs `fern docs md generate` to produce library-reference MDX from Python source. Use this before preview or publish in repos that have API reference docs. |
+| `fern-preview` | Generates a preview deployment and outputs its URL. Optionally annotates the URL with links to changed pages. |
+| `fern-preview-collect` | Collects the `fern/` directory and PR metadata into an artifact. No secrets required — safe to run on fork PRs. Use this as stage 1 of the fork-safe preview pattern. |
+| `fern-publish` | Publishes the docs site to production via `fern generate --docs`. |
+
+---
+
+## Simple Approach
+
+Use this when all pull requests come from branches in the same repository.
+Secrets are available directly in the `pull_request` trigger.
+
+### Preview on Pull Request
+
+The following example does not show any integration with Vault.
+Using Vault for the credential is a consideration.
+
+```yaml
+# .github/workflows/docs-fern-preview.yml
+name: docs-fern-preview
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'fern/**'
+
+permissions:
+  pull-requests: write
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: NVIDIA-NeMo/FW-CI-templates/.github/actions/fern-setup@<some-sha>
+
+      - uses: NVIDIA-NeMo/FW-CI-templates/.github/actions/fern-preview@<some-sha>
+        id: preview
+        with:
+          token: ${{ secrets.DOCS_FERN_TOKEN }}
+          preview-id: ${{ github.head_ref }}
+
+      - uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          body: |
+            ### Documentation Preview
+
+            ${{ steps.preview.outputs.preview-url }}
+
+            <!-- docs-preview -->
+          body-includes: '<!-- docs-preview -->'
+          edit-mode: replace
+```
+
+### Publish on Merge
+
+```yaml
+# .github/workflows/docs-fern-publish.yml
+name: docs-fern-publish
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'fern/**'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: NVIDIA-NeMo/FW-CI-templates/.github/actions/fern-setup@<some-sha>
+
+      - uses: NVIDIA-NeMo/FW-CI-templates/.github/actions/fern-publish@<some-sha>
+        with:
+          token: ${{ secrets.DOCS_FERN_TOKEN }}
+```
+
+---
+
+## OK to Test Approach
+
+Use this approach when pull requests must be approved in the repository and the branch is copied to a `pull-request-<blah>` branch.
+GitHub does not expose secrets to workflows triggered by `pull_request` events from forks, so the work is split across two stages.
+
+The first workflow runs on the `pull_request` event with no secrets.
+The workflow checks out the PR code, detects changed MDX files, and uploads the `fern/` directory and PR metadata as an artifact.
+
+The second workflow runs on `workflow_run` after the preceding workflow completes.
+This workflow has access to secrets, downloads the artifact, generates the preview, and posts a comment.
+
+### Collect Workflow
+
+```yaml
+# .github/workflows/docs-fern-preview-collect.yml
+name: fern-preview-collect
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'fern/**'
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: NVIDIA-NeMo/FW-CI-templates/.github/actions/fern-preview-collect@<some-sha>
+```
+
+### Preview and Comment Workflow
+
+```yaml
+# .github/workflows/docs-fern-preview.yml
+name: docs-fern-preview
+
+on:
+  workflow_run:
+    workflows: ["docs-fern-preview-collect"]
+    types: [completed]
+
+permissions:
+  pull-requests: write
+  actions: read
+
+jobs:
+  preview:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: fern-preview
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Read PR metadata
+        id: meta
+        run: |
+          {
+            echo "pr_number=$(cat .preview-metadata/pr_number)"
+            echo "head_ref=$(cat .preview-metadata/head_ref)"
+            echo "changed_files<<EOF"
+            cat .preview-metadata/changed_mdx_files
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: NVIDIA-NeMo/FW-CI-templates/.github/actions/fern-setup@main
+
+      - uses: NVIDIA-NeMo/FW-CI-templates/.github/actions/fern-preview@main
+        id: preview
+        with:
+          token: ${{ secrets.DOCS_FERN_TOKEN }}
+          preview-id: ${{ steps.meta.outputs.head_ref }}
+          changed-files: ${{ steps.meta.outputs.changed_files }}
+
+      - uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ steps.meta.outputs.pr_number }}
+          body: |
+            ### Fern docs preview
+
+            ${{ steps.preview.outputs.preview-url }}
+
+            ${{ steps.preview.outputs.page-links }}
+
+            <!-- docs-preview -->
+          body-includes: '<!-- docs-preview -->'
+          edit-mode: replace
+```
+
+The publish workflow is the same as in the simple approach.
+
+---
+
+## Generating library reference docs
+
+If your repository has Python source code with docstrings, use `fern-generate`
+to produce MDX before previewing or publishing:
+
+```yaml
+      - uses: NVIDIA-NeMo/FW-CI-templates/.github/actions/fern-generate@main
+        with:
+          token: ${{ secrets.DOCS_FERN_TOKEN }}
+
+      - uses: NVIDIA-NeMo/FW-CI-templates/.github/actions/fern-preview@main
+        # ...
+```
