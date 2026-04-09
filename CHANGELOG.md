@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Features
+
+* add Fern docs composite actions: `fern-setup`, `fern-generate`, `fern-preview`, `fern-preview-collect`, `fern-publish`, and `pr-comment`
+
 ## [0.88.1](https://github.com/NVIDIA-NeMo/FW-CI-templates/compare/v0.88.0...v0.88.1) (2026-04-09)
 
 
