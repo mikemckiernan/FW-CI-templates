@@ -1,0 +1,105 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: fern-preview-docs
+description: >
+  Generates a Fern preview deployment and outputs its URL.
+  Optionally fetches per-page slugs for a list of changed MDX files so callers
+  can build contextual links in a PR comment.
+
+inputs:
+  token:
+    description: Specify the secret or environment variable that has the Fern token.
+    required: true
+  fern-directory:
+    description: Directory containing the fern configuration (relative to repo root)
+    required: false
+    default: 'fern'
+  preview-id:
+    description: >
+      Stable identifier for this preview (typically the branch name).
+      Fern uses this to produce a consistent preview URL across pushes.
+    required: true
+  changed-files:
+    description: >
+      Newline-separated list of changed MDX file paths (relative to repo root).
+      When provided, the action queries the Fern API for page slugs and populates
+      the page-links output with markdown links to each changed page.
+      Falls back gracefully to an empty string on API errors or no matches.
+    required: false
+    default: ''
+
+outputs:
+  preview-url:
+    description: Full URL of the generated Fern preview deployment
+    value: ${{ steps.generate.outputs.preview_url }}
+  page-links:
+    description: >
+      Markdown-formatted list of links to changed pages in the preview,
+      like "- [some/page](https://preview.url/some/page)".
+      Empty string if changed-files was not provided or no slugs were found.
+    value: ${{ steps.page-links.outputs.page_links }}
+
+runs:
+  using: composite
+  steps:
+    - name: Generate preview URL
+      id: generate
+      shell: bash
+      working-directory: ${{ inputs.fern-directory }}
+      env:
+        FERN_TOKEN: ${{ inputs.token }}
+        PREVIEW_ID: ${{ inputs.preview-id }}
+      run: |
+        OUTPUT=$(fern generate --docs --preview --id "$PREVIEW_ID" 2>&1)
+        echo "$OUTPUT"
+        URL=$(echo "$OUTPUT" | grep -oP 'Published docs to \K.*(?= \()')
+        if [ -z "$URL" ]; then
+          echo "::error::Failed to extract preview URL from fern output. See output above."
+          exit 1
+        fi
+        echo "preview_url=$URL" >> "$GITHUB_OUTPUT"
+
+    - name: Build page links for changed MDX files
+      id: page-links
+      shell: bash
+      env:
+        FERN_TOKEN: ${{ inputs.token }}
+        PREVIEW_URL: ${{ steps.generate.outputs.preview_url }}
+        CHANGED_FILES: ${{ inputs.changed-files }}
+      run: |
+        if [ -z "$CHANGED_FILES" ] || [ -z "$PREVIEW_URL" ]; then
+          echo "page_links=" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        BASE_URL=$(echo "$PREVIEW_URL" | grep -oP 'https?://[^/]+')
+        FILES_PARAM=$(echo "$CHANGED_FILES" | tr '\n' ',' | sed 's/,$//' \
+          | python3 -c "import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read().strip(), safe=',/'))")
+
+        RESPONSE=$(curl -sf -H "FERN_TOKEN: $FERN_TOKEN" \
+          "${PREVIEW_URL}/api/fern-docs/get-slug-for-file?files=${FILES_PARAM}" 2>/dev/null) || {
+          echo "page_links=" >> "$GITHUB_OUTPUT"
+          exit 0
+        }
+
+        PAGE_LINKS=$(echo "$RESPONSE" | jq -r --arg url "$BASE_URL" \
+          '.mappings[] | select(.slug != null) | "- [\(.slug)](\($url)/\(.slug))"')
+
+        if [ -n "$PAGE_LINKS" ]; then
+          { echo "page_links<<EOF"; echo "$PAGE_LINKS"; echo "EOF"; } >> "$GITHUB_OUTPUT"
+        else
+          echo "page_links=" >> "$GITHUB_OUTPUT"
+        fi

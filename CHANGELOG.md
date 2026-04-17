@@ -1,7 +1,12 @@
 # Changelog
 
-## [0.93.0](https://github.com/NVIDIA-NeMo/FW-CI-templates/compare/v0.92.0...v0.93.0) (2026-04-16)
+## [Unreleased]
 
+### Features
+
+* Add Fern docs composite actions: `fern-setup`, `fern-generate`, `fern-preview`, `fern-preview-collect`, `fern-publish`, and `pr-comment`
+
+## [0.93.0](https://github.com/NVIDIA-NeMo/FW-CI-templates/compare/v0.92.0...v0.93.0) (2026-04-16)
 
 ### Features
 

@@ -1,0 +1,9 @@
+instances:
+  - url: nvidia-nemo-ci-templates.docs.buildwithfern.com
+title: NeMo CI Templates
+navigation:
+  - page: About
+    path: pages/index.mdx
+colors:
+  accentPrimary: '#76b900'
+  background: '#000000'
